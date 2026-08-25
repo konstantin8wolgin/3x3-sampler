@@ -10,6 +10,23 @@ import torch
 from .atoms import CDTYPE, RDTYPE
 
 
+def _validated_channel_ids(
+    channel: torch.Tensor, *, device: torch.device
+) -> torch.Tensor:
+    raw_channel = torch.atleast_1d(torch.as_tensor(channel))
+    if raw_channel.dtype == torch.bool:
+        raise ValueError("channel ids must be finite integers")
+    real_channel = raw_channel.real if raw_channel.is_complex() else raw_channel
+    if (
+        not torch.isfinite(real_channel).all()
+        or raw_channel.is_complex()
+        and not torch.equal(raw_channel.imag, torch.zeros_like(raw_channel.imag))
+        or not torch.equal(real_channel, torch.round(real_channel))
+    ):
+        raise ValueError("channel ids must be finite integers")
+    return real_channel.to(device=device, dtype=torch.int64)
+
+
 @dataclass(frozen=True, slots=True)
 class IndexedContourSample:
     """Samples from explicit channels of the exact translated contour."""
@@ -160,6 +177,8 @@ class ExactIndexedContourOracle:
         phi = torch.atleast_2d(phi).to(device=self.modes.device, dtype=CDTYPE)
         if phi.ndim != 2 or phi.shape[1] != self.d:
             raise ValueError("field dimension must match mode dimension")
+        if not torch.isfinite(phi.real).all() or not torch.isfinite(phi.imag).all():
+            raise ValueError("field values must be finite")
         diff = phi[:, None, :] - self.means[None, :, :]
         log_atoms = -0.5 * self.precision * (diff * diff).sum(dim=-1)
         log_terms = log_atoms + self.channel_log_masses[None, :]
@@ -197,18 +216,7 @@ class ExactIndexedContourOracle:
     ) -> IndexedContourSample:
         """Transport explicit channel ids, including float64-rare channels."""
 
-        raw_channel = torch.atleast_1d(torch.as_tensor(channel))
-        real_channel = raw_channel.real if raw_channel.is_complex() else raw_channel
-        if (
-            not torch.isfinite(real_channel).all()
-            or raw_channel.is_complex()
-            and not torch.equal(
-                raw_channel.imag, torch.zeros_like(raw_channel.imag)
-            )
-            or not torch.equal(real_channel, torch.round(real_channel))
-        ):
-            raise ValueError("channel ids must be finite integers")
-        channel = real_channel.to(device=self.modes.device, dtype=torch.int64)
+        channel = _validated_channel_ids(channel, device=self.modes.device)
         if bool((channel < 0).any()) or bool((channel >= self.mode_count).any()):
             raise ValueError("channel ids must belong to the oracle")
         n = int(channel.numel())
@@ -254,11 +262,13 @@ class ExactIndexedContourOracle:
         endpoint = torch.atleast_2d(endpoint).to(
             device=self.modes.device, dtype=CDTYPE
         )
-        channel = torch.atleast_1d(channel).to(
-            device=self.modes.device, dtype=torch.int64
-        )
+        channel = _validated_channel_ids(channel, device=self.modes.device)
         if endpoint.shape[0] != channel.numel() or endpoint.shape[1] != self.d:
             raise ValueError("endpoint and channel shapes must match the oracle")
+        if not torch.isfinite(endpoint.real).all() or not torch.isfinite(
+            endpoint.imag
+        ).all():
+            raise ValueError("endpoint values must be finite")
         if bool((channel < 0).any()) or bool((channel >= self.mode_count).any()):
             raise ValueError("channel ids must belong to the oracle")
         return (endpoint - self.means[channel]).real

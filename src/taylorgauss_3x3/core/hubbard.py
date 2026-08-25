@@ -93,7 +93,20 @@ class Hubbard3x3Target:
         self.n_t = 1
         self.d = 9
         self.dt = self.beta
-        self.precision = 1.0 / (self.U * self.beta)
+        scale = self.U * self.beta
+        normal_min = torch.finfo(RDTYPE).tiny
+        if not math.isfinite(scale) or scale < normal_min:
+            raise ValueError(
+                "U * beta and its derived precision must be finite positive "
+                "normal float64 values"
+            )
+        precision = 1.0 / scale
+        if not math.isfinite(precision) or precision < normal_min:
+            raise ValueError(
+                "U * beta and its derived precision must be finite positive "
+                "normal float64 values"
+            )
+        self.precision = precision
         self.prior_prec = self.precision
 
         mu_beta = self.mu_chem * self.beta

@@ -104,20 +104,34 @@ def test_target_rejects_nonfinite_parameters(name, value):
     ("U", "beta"),
     [
         (1e308, 2.0),
-        (1e308, 1.0),
-        (1e-308, 1.0),
         (1e-308, 1e-308),
+        (math.ulp(0.0), 1.0),
     ],
     ids=[
         "scale-overflows",
-        "precision-underflows",
-        "scale-underflows",
         "scale-becomes-zero",
+        "precision-overflows",
     ],
 )
 def test_target_rejects_unrepresentable_derived_precision(U, beta):
     with pytest.raises(ValueError, match="precision"):
         Hubbard3x3Target(U=U, beta=beta, kappa=0.0, mu_chem=0.0)
+
+
+def test_target_accepts_representable_subnormal_scale_with_valid_oracle():
+    target = Hubbard3x3Target(U=1e-308, beta=1.0, kappa=0.0, mu_chem=0.0)
+    oracle = target.exact_indexed_oracle()
+    zero = torch.zeros(1, 9, dtype=RDTYPE)
+
+    assert target.precision == 1e308
+    assert oracle.mode_count == 3**9
+    assert bool(torch.isfinite(oracle.channel_log_magnitudes).all())
+    assert bool((oracle.channel_masses.real > 0.0).all())
+    assert bool(torch.isfinite(oracle.means.real).all())
+    assert bool(torch.isfinite(oracle.means.imag).all())
+    torch.testing.assert_close(
+        oracle.evaluate(zero), target.evaluate(zero), rtol=1e-12, atol=1e-12
+    )
 
 
 @pytest.mark.parametrize(

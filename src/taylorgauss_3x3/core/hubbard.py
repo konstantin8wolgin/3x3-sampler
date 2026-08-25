@@ -94,17 +94,19 @@ class Hubbard3x3Target:
         self.d = 9
         self.dt = self.beta
         scale = self.U * self.beta
-        normal_min = torch.finfo(RDTYPE).tiny
-        if not math.isfinite(scale) or scale < normal_min:
+        if not math.isfinite(scale) or scale <= 0.0:
             raise ValueError(
-                "U * beta and its derived precision must be finite positive "
-                "normal float64 values"
+                "U * beta and its derived precision must be finite and positive"
             )
-        precision = 1.0 / scale
-        if not math.isfinite(precision) or precision < normal_min:
+        try:
+            precision = 1.0 / scale
+        except (OverflowError, ZeroDivisionError) as exc:
             raise ValueError(
-                "U * beta and its derived precision must be finite positive "
-                "normal float64 values"
+                "U * beta and its derived precision must be finite and positive"
+            ) from exc
+        if not math.isfinite(precision) or precision <= 0.0:
+            raise ValueError(
+                "U * beta and its derived precision must be finite and positive"
             )
         self.precision = precision
         self.prior_prec = self.precision

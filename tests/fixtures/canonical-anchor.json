@@ -1,0 +1,8 @@
+{
+  "parameters": {"U": 2.0, "beta": 1.5, "kappa": 1.0, "mu_chem": 0.75},
+  "mode_count": 19683,
+  "mixed_linear_quadratic": {"real": 1.2384040693411869, "imag": -2.0508704419898993e-15},
+  "odd_linear": {"real": 0.0, "imag": 0.3228805203648307},
+  "quadratic_mean_field": {"real": 1.2384040693411869, "imag": 0.0},
+  "physical_log_partition": 32.36358464798972
+}

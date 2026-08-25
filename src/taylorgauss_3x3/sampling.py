@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from dataclasses import dataclass
 import hashlib
 import math
@@ -13,7 +14,7 @@ from .core import CDTYPE, RDTYPE, ExactIndexedContourOracle
 from .core.observables import EntirePolynomial
 
 
-_RNG_SCIENCE_ALGORITHM_VERSION = "tg3x3-record-indexed-sha256-v1"
+_RNG_SCIENCE_ALGORITHM_VERSION = "tg3x3-record-indexed-exact-rational-v2"
 
 
 def _tensor_sha256(*values: torch.Tensor) -> str:
@@ -26,13 +27,19 @@ def _tensor_sha256(*values: torch.Tensor) -> str:
     return digest.hexdigest()
 
 
-def _counter_digest(*, seed: int, domain: str, counter: int) -> bytes:
+def _counter_digest(
+    *, seed: int, domain: str, counter: int, attempt: int = 0, block: int = 0
+) -> bytes:
     if type(seed) is not int or not -(2**63) <= seed < 2**63:
         raise ValueError("counter RNG seed must be a signed 64-bit integer")
     if not isinstance(domain, str) or not domain or "\x00" in domain:
         raise ValueError("counter RNG domain must be a nonempty text label")
     if type(counter) is not int or not 0 <= counter < 2**64:
         raise ValueError("counter RNG record index must be an unsigned 64-bit integer")
+    if type(attempt) is not int or not 0 <= attempt < 2**64:
+        raise ValueError("counter RNG rejection attempt must be an unsigned 64-bit integer")
+    if type(block) is not int or not 0 <= block < 2**32:
+        raise ValueError("counter RNG block index must be an unsigned 32-bit integer")
     digest = hashlib.sha256()
     digest.update(_RNG_SCIENCE_ALGORITHM_VERSION.encode("ascii"))
     digest.update(b"\x00")
@@ -40,14 +47,41 @@ def _counter_digest(*, seed: int, domain: str, counter: int) -> bytes:
     digest.update(b"\x00")
     digest.update(seed.to_bytes(8, "big", signed=True))
     digest.update(counter.to_bytes(8, "big", signed=False))
+    digest.update(attempt.to_bytes(8, "big", signed=False))
+    digest.update(block.to_bytes(4, "big", signed=False))
     return digest.digest()
 
 
-def _counter_uniform_float64(*, seed: int, domain: str, counter: int) -> float:
-    mantissa = int.from_bytes(
-        _counter_digest(seed=seed, domain=domain, counter=counter)[:8], "big"
-    ) >> 11
-    return (mantissa + 0.5) * (2.0**-53)
+def _counter_uniform_below(
+    *, seed: int, domain: str, counter: int, upper: int
+) -> int:
+    """Draw an exact uniform integer in ``range(upper)`` by rejection."""
+
+    if type(upper) is not int or upper < 1:
+        raise ValueError("counter RNG integer upper bound must be positive")
+    bit_count = upper.bit_length()
+    block_count = (bit_count + 255) // 256
+    mask = (1 << bit_count) - 1
+    attempt = 0
+    while True:
+        candidate = 0
+        for block in range(block_count):
+            candidate = (candidate << 256) | int.from_bytes(
+                _counter_digest(
+                    seed=seed,
+                    domain=domain,
+                    counter=counter,
+                    attempt=attempt,
+                    block=block,
+                ),
+                "big",
+            )
+        candidate &= mask
+        if candidate < upper:
+            return candidate
+        attempt += 1
+        if attempt >= 2**64:
+            raise RuntimeError("counter RNG exhausted its rejection-attempt space")
 
 
 def _counter_torch_seed(*, seed: int, domain: str, counter: int) -> int:
@@ -56,9 +90,23 @@ def _counter_torch_seed(*, seed: int, domain: str, counter: int) -> int:
     )
 
 
+def _represented_integer_masses(probabilities: torch.Tensor) -> tuple[tuple[int, ...], int]:
+    ratios = [float(value).as_integer_ratio() for value in probabilities]
+    exponents = [denominator.bit_length() - 1 for _, denominator in ratios]
+    common_exponent = max(exponents)
+    masses = tuple(
+        numerator << (common_exponent - exponent)
+        for (numerator, _), exponent in zip(ratios, exponents, strict=True)
+    )
+    total = sum(masses)
+    if total <= 0:
+        raise ValueError("channel probabilities must have positive represented mass")
+    return masses, total
+
+
 def _proposal_for_design(
     oracle: ExactIndexedContourOracle, design: str
-) -> torch.Tensor:
+) -> tuple[tuple[int, ...], int, torch.Tensor, torch.Tensor]:
     probabilities = oracle.channel_probabilities
     if design == IID_CHANNEL_DESIGN:
         if bool((probabilities == 0.0).any()):
@@ -66,11 +114,46 @@ def _proposal_for_design(
                 "some finite-log channel probabilities are below float64 resolution; "
                 "select defensive_half_uniform_importance for complete support"
             )
-        return probabilities
-    if design == WEIGHTED_CHANNEL_DESIGN:
-        represented = probabilities / probabilities.sum()
-        return 0.5 * represented + 0.5 / oracle.mode_count
-    raise ValueError(f"unsupported channel design: {design}")
+    elif design != WEIGHTED_CHANNEL_DESIGN:
+        raise ValueError(f"unsupported channel design: {design}")
+
+    represented_masses, represented_total = _represented_integer_masses(
+        probabilities
+    )
+    if design == IID_CHANNEL_DESIGN:
+        numerators = represented_masses
+        denominator = represented_total
+    else:
+        mode_count = oracle.mode_count
+        numerators = tuple(
+            mode_count * mass + represented_total for mass in represented_masses
+        )
+        denominator = 2 * mode_count * represented_total
+    if sum(numerators) != denominator:
+        raise RuntimeError("exact rational proposal masses must sum to their denominator")
+    if any(numerator <= 0 for numerator in numerators):
+        raise ValueError(
+            "the represented categorical proposal does not have complete support"
+        )
+    proposal = torch.tensor(
+        [numerator / denominator for numerator in numerators],
+        dtype=RDTYPE,
+        device=oracle.modes.device,
+    )
+    log_proposal = torch.log(proposal)
+    return numerators, denominator, proposal, log_proposal
+
+
+def _channel_from_uniform_integer(
+    cumulative_masses: tuple[int, ...], draw: int
+) -> int:
+    """Map one exact uniform integer to its categorical mass interval."""
+
+    if not cumulative_masses or cumulative_masses[0] <= 0:
+        raise ValueError("categorical cumulative masses must be positive")
+    if type(draw) is not int or not 0 <= draw < cumulative_masses[-1]:
+        raise ValueError("categorical integer draw must belong to the proposal range")
+    return bisect_right(cumulative_masses, draw)
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +162,9 @@ class ChannelAllocation:
 
     channel: torch.Tensor
     proposal_probabilities: torch.Tensor
+    proposal_log_probabilities: torch.Tensor
+    proposal_numerators: tuple[int, ...]
+    proposal_denominator: int
     log_design_weight: torch.Tensor
     design: str
     seed: int
@@ -87,6 +173,8 @@ class ChannelAllocation:
     underflowed_iid_categorical_refused: bool
     unrepresentable_channel_count: int
     unrepresentable_log_probability_mass: float | None
+    rng_algorithm_version: str
+    oracle_probability_sha256: str
 
     @property
     def selected_proposal_probability(self) -> torch.Tensor:
@@ -120,33 +208,44 @@ def allocate_channels(
     probabilities = oracle.channel_probabilities
     underflow_mask = probabilities == 0.0
     underflowed = bool(underflow_mask.any())
-    proposal = _proposal_for_design(oracle, design)
+    (
+        proposal_numerators,
+        proposal_denominator,
+        proposal,
+        proposal_log_probabilities,
+    ) = _proposal_for_design(oracle, design)
     domain = (
         "iid_exact_categorical.channel"
         if design == IID_CHANNEL_DESIGN
         else "defensive_half_uniform_importance.channel"
     )
-    uniforms = torch.tensor(
+    cumulative_values: list[int] = []
+    cumulative = 0
+    for numerator in proposal_numerators:
+        cumulative += numerator
+        cumulative_values.append(cumulative)
+    cumulative_masses = tuple(cumulative_values)
+    channel = torch.tensor(
         [
-            _counter_uniform_float64(seed=seed, domain=domain, counter=index)
+            _channel_from_uniform_integer(
+                cumulative_masses,
+                _counter_uniform_below(
+                    seed=seed,
+                    domain=domain,
+                    counter=index,
+                    upper=proposal_denominator,
+                ),
+            )
             for index in range(sample_count)
         ],
-        dtype=RDTYPE,
+        dtype=torch.int64,
         device=oracle.modes.device,
     )
-    cumulative = torch.cumsum(proposal, dim=0)
-    cumulative[-1] = 1.0
-    channel = torch.searchsorted(cumulative, uniforms, right=False).to(torch.int64)
-    if design == IID_CHANNEL_DESIGN:
-        log_weight = torch.zeros(
-            sample_count, dtype=RDTYPE, device=oracle.modes.device
-        )
-        iid_used = True
-    else:
-        log_weight = oracle.channel_log_probabilities[channel] - torch.log(
-            proposal[channel]
-        )
-        iid_used = False
+    log_weight = (
+        oracle.channel_log_probabilities[channel]
+        - proposal_log_probabilities[channel]
+    )
+    iid_used = design == IID_CHANNEL_DESIGN
     if not bool(torch.isfinite(log_weight).all()):
         raise FloatingPointError(
             "channel design must have finite complete-support log weights"
@@ -155,6 +254,9 @@ def allocate_channels(
     return ChannelAllocation(
         channel=channel,
         proposal_probabilities=proposal,
+        proposal_log_probabilities=proposal_log_probabilities,
+        proposal_numerators=proposal_numerators,
+        proposal_denominator=proposal_denominator,
         log_design_weight=log_weight,
         design=design,
         seed=seed,
@@ -171,6 +273,8 @@ def allocate_channels(
             if underflowed
             else None
         ),
+        rng_algorithm_version=_RNG_SCIENCE_ALGORITHM_VERSION,
+        oracle_probability_sha256=_tensor_sha256(oracle.channel_probabilities),
     )
 
 
@@ -181,6 +285,9 @@ class LogComponentStatistics:
     positive_log_sum: float | None
     negative_log_sum: float | None
     log_sum_squares: float | None
+    log_scale: float | None
+    scaled_sum: float
+    scaled_sum_squared_deviations: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,6 +321,23 @@ def _log_component_statistics(
     positive = component > 0.0
     negative = component < 0.0
     nonzero = component != 0.0
+    log_magnitude = log_weight[nonzero] + torch.log(component[nonzero].abs())
+    if log_magnitude.numel():
+        log_scale = float(log_magnitude.max())
+        scaled = torch.zeros_like(component)
+        scaled[nonzero] = torch.sign(component[nonzero]) * torch.exp(
+            log_magnitude - log_scale
+        )
+        scaled_values = scaled.tolist()
+        scaled_sum = math.fsum(scaled_values)
+        scaled_mean = scaled_sum / int(component.numel())
+        scaled_sum_squared_deviations = math.fsum(
+            (value - scaled_mean) ** 2 for value in scaled_values
+        )
+    else:
+        log_scale = None
+        scaled_sum = 0.0
+        scaled_sum_squared_deviations = 0.0
     return LogComponentStatistics(
         positive_log_sum=_optional_logsumexp(
             log_weight[positive] + torch.log(component[positive])
@@ -224,24 +348,19 @@ def _log_component_statistics(
         log_sum_squares=_optional_logsumexp(
             2.0 * (log_weight[nonzero] + torch.log(component[nonzero].abs()))
         ),
+        log_scale=log_scale,
+        scaled_sum=scaled_sum,
+        scaled_sum_squared_deviations=scaled_sum_squared_deviations,
     )
 
 
-def _signed_log_sum(
-    statistics: LogComponentStatistics,
-) -> tuple[float, float | None]:
-    positive = statistics.positive_log_sum
-    negative = statistics.negative_log_sum
-    if positive is None and negative is None:
-        return 0.0, None
-    scale = max(value for value in (positive, negative) if value is not None)
-    scaled = (
-        (0.0 if positive is None else math.exp(positive - scale))
-        - (0.0 if negative is None else math.exp(negative - scale))
+def _rescale_signed(value: float, log_scale: float | None) -> float:
+    if value == 0.0 or log_scale is None:
+        return 0.0
+    return math.copysign(
+        math.exp(log_scale + math.log(abs(value))),
+        value,
     )
-    if scaled == 0.0:
-        return 0.0, None
-    return math.copysign(1.0, scaled), scale + math.log(abs(scaled))
 
 
 def _estimate_from_log_statistics(
@@ -252,36 +371,21 @@ def _estimate_from_log_statistics(
 ) -> tuple[complex, float, float]:
     if type(count) is not int or count < 2:
         raise ValueError("log sufficient statistics require at least two samples")
-    signed_log_sums = (_signed_log_sum(real), _signed_log_sum(imag))
     estimates: list[float] = []
     errors: list[float] = []
-    log_count = math.log(count)
-    for (sign, log_sum), statistics in zip(
-        signed_log_sums, (real, imag), strict=True
-    ):
-        estimate = 0.0 if log_sum is None else sign * math.exp(log_sum - log_count)
-        estimates.append(estimate)
-        if statistics.log_sum_squares is None:
-            errors.append(0.0)
-            continue
-        centered_term = None if log_sum is None else 2.0 * log_sum - log_count
-        scale = max(
-            value
-            for value in (statistics.log_sum_squares, centered_term)
-            if value is not None
+    for statistics in (real, imag):
+        estimates.append(
+            _rescale_signed(
+                statistics.scaled_sum / count,
+                statistics.log_scale,
+            )
         )
-        scaled_variance_numerator = math.exp(
-            statistics.log_sum_squares - scale
-        ) - (0.0 if centered_term is None else math.exp(centered_term - scale))
-        if scaled_variance_numerator <= 0.0:
-            errors.append(0.0)
-            continue
-        log_variance_of_mean = (
-            scale
-            + math.log(scaled_variance_numerator)
-            - math.log(count * (count - 1))
+        scaled_standard_error = math.sqrt(
+            statistics.scaled_sum_squared_deviations / (count * (count - 1))
         )
-        errors.append(math.exp(0.5 * log_variance_of_mean))
+        errors.append(
+            _rescale_signed(scaled_standard_error, statistics.log_scale)
+        )
     if not all(math.isfinite(value) for value in (*estimates, *errors)):
         raise FloatingPointError("log-domain estimate and uncertainty must be finite")
     return complex(*estimates), errors[0], errors[1]
@@ -304,16 +408,26 @@ def _validate_estimator_inputs(
         (allocation.channel >= oracle.mode_count).any()
     ):
         raise ValueError("allocation channels must belong to the oracle")
-    expected_proposal = _proposal_for_design(oracle, allocation.design)
-    if not torch.equal(allocation.proposal_probabilities, expected_proposal):
+    if allocation.oracle_probability_sha256 != _tensor_sha256(
+        oracle.channel_probabilities
+    ):
         raise ValueError("allocation proposal does not belong to this oracle")
+    if (
+        len(allocation.proposal_numerators) != oracle.mode_count
+        or allocation.proposal_probabilities.shape != (oracle.mode_count,)
+        or allocation.proposal_log_probabilities.shape != (oracle.mode_count,)
+        or allocation.proposal_denominator <= 0
+        or sum(allocation.proposal_numerators) != allocation.proposal_denominator
+        or any(numerator <= 0 for numerator in allocation.proposal_numerators)
+    ):
+        raise ValueError("allocation rational proposal is invalid")
+    if allocation.rng_algorithm_version != _RNG_SCIENCE_ALGORITHM_VERSION:
+        raise ValueError("allocation RNG algorithm does not belong to this estimator")
     if allocation.log_design_weight.shape != allocation.channel.shape:
         raise ValueError("allocation log weights must match its ordered channels")
     expected_log_weight = (
-        torch.zeros_like(allocation.log_design_weight)
-        if allocation.design == IID_CHANNEL_DESIGN
-        else oracle.channel_log_probabilities[allocation.channel]
-        - torch.log(expected_proposal[allocation.channel])
+        oracle.channel_log_probabilities[allocation.channel]
+        - allocation.proposal_log_probabilities[allocation.channel]
     )
     if not torch.equal(allocation.log_design_weight, expected_log_weight):
         raise ValueError("allocation correction does not belong to this oracle")

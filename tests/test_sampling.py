@@ -360,6 +360,64 @@ def test_defensive_proposal_has_complete_support_and_exact_log_correction():
     assert estimate.value.imag == pytest.approx(0.75, abs=3.0 * estimate.standard_error_imag)
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "rational_numerators",
+        "rational_denominator",
+        "float_proposal",
+        "log_proposal_and_selected_weights",
+        "declared_design",
+    ],
+)
+def test_estimator_rejects_tampered_allocation_proposal_state(mutation):
+    """Catches public allocations whose mutually consistent-looking q fields drift."""
+
+    oracle = _underflow_oracle()
+    allocation = allocate_channels(
+        oracle,
+        sample_count=16,
+        seed=92,
+        design=WEIGHTED_CHANNEL_DESIGN,
+    )
+    if mutation == "rational_numerators":
+        numerators = list(allocation.proposal_numerators)
+        numerators[0] += 1
+        numerators[-1] -= 1
+        tampered = replace(allocation, proposal_numerators=tuple(numerators))
+    elif mutation == "rational_denominator":
+        tampered = replace(
+            allocation,
+            proposal_numerators=tuple(
+                2 * numerator for numerator in allocation.proposal_numerators
+            ),
+            proposal_denominator=2 * allocation.proposal_denominator,
+        )
+    elif mutation == "float_proposal":
+        proposal = allocation.proposal_probabilities.clone()
+        proposal[0] = torch.nextafter(proposal[0], torch.ones_like(proposal[0]))
+        tampered = replace(allocation, proposal_probabilities=proposal)
+    elif mutation == "log_proposal_and_selected_weights":
+        log_proposal = allocation.proposal_log_probabilities + math.log(2.0)
+        tampered = replace(
+            allocation,
+            proposal_log_probabilities=log_proposal,
+            log_design_weight=(
+                oracle.channel_log_probabilities[allocation.channel]
+                - log_proposal[allocation.channel]
+            ),
+        )
+    else:
+        tampered = replace(allocation, design=IID_CHANNEL_DESIGN)
+
+    with pytest.raises(ValueError):
+        estimate_rao_blackwell(
+            oracle,
+            EntirePolynomial(constant=1.0),
+            tampered,
+        )
+
+
 _RB_WEIGHTED_FIXTURE = {
     202609010011: {
         "quadratic_mean_field": (1.2217453687292403 + 0.0j, 0.03100371044410752, 0.0),

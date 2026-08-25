@@ -423,11 +423,28 @@ def _validate_estimator_inputs(
         raise ValueError("allocation rational proposal is invalid")
     if allocation.rng_algorithm_version != _RNG_SCIENCE_ALGORITHM_VERSION:
         raise ValueError("allocation RNG algorithm does not belong to this estimator")
+    (
+        expected_numerators,
+        expected_denominator,
+        expected_proposal,
+        expected_log_proposal,
+    ) = _proposal_for_design(oracle, allocation.design)
+    if (
+        allocation.proposal_numerators != expected_numerators
+        or allocation.proposal_denominator != expected_denominator
+    ):
+        raise ValueError("allocation rational proposal does not match its design")
+    if not torch.equal(allocation.proposal_probabilities, expected_proposal):
+        raise ValueError("allocation float proposal does not match its design")
+    if not torch.equal(
+        allocation.proposal_log_probabilities, expected_log_proposal
+    ):
+        raise ValueError("allocation log proposal does not match its design")
     if allocation.log_design_weight.shape != allocation.channel.shape:
         raise ValueError("allocation log weights must match its ordered channels")
     expected_log_weight = (
         oracle.channel_log_probabilities[allocation.channel]
-        - allocation.proposal_log_probabilities[allocation.channel]
+        - expected_log_proposal[allocation.channel]
     )
     if not torch.equal(allocation.log_design_weight, expected_log_weight):
         raise ValueError("allocation correction does not belong to this oracle")

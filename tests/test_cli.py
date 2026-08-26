@@ -25,6 +25,20 @@ def installed_environment(tmp_path_factory: pytest.TempPathFactory) -> Path:
         text=True,
     )
     python = environment / "bin" / "python"
+    build_tools = subprocess.run(
+        [
+            str(python),
+            "-m",
+            "pip",
+            "install",
+            "setuptools>=77,<82",
+            "wheel>=0.43,<1",
+        ],
+        cwd=REPOSITORY,
+        capture_output=True,
+        text=True,
+    )
+    assert build_tools.returncode == 0, build_tools.stdout + build_tools.stderr
     installed = subprocess.run(
         [
             str(python),

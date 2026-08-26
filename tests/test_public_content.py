@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tomllib
 import zipfile
 
 import pytest
@@ -341,6 +342,23 @@ def test_tracked_public_content_has_the_ci_fixture_and_no_private_surface():
     assert CI_WORKFLOW in tracked, "public release gate has no tracked CI workflow"
     for relative in tracked:
         _assert_allowed(relative, (REPOSITORY / relative).read_bytes())
+
+
+def test_release_metadata_freezes_numeric_runtime_and_supplies_build_tools():
+    """Catches dependency resolution that changes anchors or breaks no-isolation builds."""
+
+    metadata = tomllib.loads(
+        (REPOSITORY / "pyproject.toml").read_text(encoding="utf-8")
+    )
+
+    assert metadata["project"]["dependencies"] == [
+        "numpy==2.4.4",
+        "torch==2.11.0",
+    ]
+    assert set(metadata["build-system"]["requires"]).issubset(
+        metadata["project"]["optional-dependencies"]["dev"]
+    )
+    assert metadata["project"]["license"] == "Apache-2.0"
 
 
 def test_wheel_members_are_public_and_have_only_public_dependencies(

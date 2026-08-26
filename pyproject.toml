@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69,<82", "wheel>=0.43,<1"]
+requires = ["setuptools>=77,<82", "wheel>=0.43,<1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,11 +8,17 @@ version = "0.1.0"
 description = "Exact and auditable periodic 3x3 one-slice Taylor-Gauss sampling"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
-license = {text = "Apache-2.0"}
-dependencies = ["numpy>=1.26,<3", "torch>=2.5,<3"]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+dependencies = ["numpy==2.4.4", "torch==2.11.0"]
 
 [project.optional-dependencies]
-dev = ["build>=1.2,<2", "pytest>=8,<10"]
+dev = [
+    "build>=1.2,<2",
+    "pytest>=8,<10",
+    "setuptools>=77,<82",
+    "wheel>=0.43,<1",
+]
 
 [project.scripts]
 tg-3x3 = "taylorgauss_3x3.cli:main"

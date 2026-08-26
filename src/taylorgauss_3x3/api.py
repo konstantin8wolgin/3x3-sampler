@@ -2,8 +2,18 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 from .actions import build_action
-from .config import ExactRunConfig, StochasticRunConfig
+from .artifacts import derive_estimates, validate_run, write_run
+from .config import (
+    EXPLICIT_STOCHASTIC_METHOD,
+    RB_STOCHASTIC_METHOD,
+    ExactRunConfig,
+    StochasticRunConfig,
+)
+from .reporting import render_report
 
 
 _EXACT_CHANNEL_COUNT = 3**9
@@ -67,29 +77,48 @@ def describe(
     return description
 
 
-def _not_implemented(*args, **kwargs):
-    raise NotImplementedError("This public API is implemented in a later task.")
+def estimate(
+    source: str | Path, output: str | Path | None = None
+) -> dict[str, Any] | Path:
+    """Re-derive an estimate from completed stored content."""
+
+    return derive_estimates(source, output)
 
 
-def estimate(*args, **kwargs):
-    return _not_implemented(*args, **kwargs)
+def report(source: str | Path, output: str | Path | None = None) -> Path:
+    """Access or immutably reproduce a completed offline report."""
+
+    return render_report(source, output)
 
 
-def report(*args, **kwargs):
-    return _not_implemented(*args, **kwargs)
+def run_contour(config: StochasticRunConfig, output: str | Path) -> Path:
+    """Run the explicit exact-contour estimator into an immutable directory."""
+
+    if (
+        type(config) is not StochasticRunConfig
+        or config.method != EXPLICIT_STOCHASTIC_METHOD
+    ):
+        raise ValueError("run_contour requires an exact-contour configuration")
+    return write_run(config, output)
 
 
-def run_contour(*args, **kwargs):
-    return _not_implemented(*args, **kwargs)
+def run_exact(config: ExactRunConfig, output: str | Path) -> Path:
+    """Run exact enumeration into an immutable directory."""
+
+    if type(config) is not ExactRunConfig:
+        raise ValueError("run_exact requires an ExactRunConfig")
+    return write_run(config, output)
 
 
-def run_exact(*args, **kwargs):
-    return _not_implemented(*args, **kwargs)
+def run_rao_blackwell(config: StochasticRunConfig, output: str | Path) -> Path:
+    """Run the Rao--Blackwell exact-contour estimator immutably."""
+
+    if type(config) is not StochasticRunConfig or config.method != RB_STOCHASTIC_METHOD:
+        raise ValueError("run_rao_blackwell requires an exact-contour-rb configuration")
+    return write_run(config, output)
 
 
-def run_rao_blackwell(*args, **kwargs):
-    return _not_implemented(*args, **kwargs)
+def validate(run_directory: str | Path) -> dict[str, Any]:
+    """Delegate to the artifact-owned independent validator."""
 
-
-def validate(*args, **kwargs):
-    return _not_implemented(*args, **kwargs)
+    return validate_run(run_directory)

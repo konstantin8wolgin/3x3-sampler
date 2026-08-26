@@ -39,6 +39,31 @@ CI_MUTATIONS = (
         "tests/test_public_content.py\n",
         "",
     ),
+    (
+        "      - uses: actions/setup-python@v5\n"
+        "        with:\n"
+        "          python-version: ${{ matrix.python }}\n"
+        "          cache: pip\n",
+        "",
+    ),
+    (
+        "          python-version: ${{ matrix.python }}\n",
+        "          python-version: 3.12\n",
+    ),
+    (
+        "      - uses: actions/setup-python@v5\n"
+        "        with:\n"
+        "          python-version: ${{ matrix.python }}\n"
+        "          cache: pip\n",
+        "      - uses: actions/setup-python@v5\n"
+        "        with:\n"
+        "          python-version: ${{ matrix.python }}\n"
+        "          cache: pip\n"
+        "      - uses: actions/setup-python@v5\n"
+        "        with:\n"
+        "          python-version: ${{ matrix.python }}\n"
+        "          cache: pip\n",
+    ),
 )
 CI_RUN_COMMANDS = (
     "python -m pip install --upgrade pip",
@@ -46,6 +71,14 @@ CI_RUN_COMMANDS = (
     "python -m pytest",
     "python -m build",
     "python -m pytest -q tests/test_clean_install.py tests/test_public_content.py",
+)
+CACHE_PROBES = (
+    "scratch/" "__py" "cache__/sentinel.txt",
+    "scratch/" ".pytest" "_cache/state",
+)
+CACHE_RULE_MUTATIONS = (
+    ("__py[c]ache__/\n", ""),
+    (".pytest_[c]ache/\n", ""),
 )
 
 
@@ -111,6 +144,20 @@ def _mapping_block(
     return records[start:end]
 
 
+def _sequence_item_blocks(
+    records: list[tuple[int, str]], indent: int
+) -> list[list[tuple[int, str]]]:
+    starts = [
+        index
+        for index, (actual_indent, content) in enumerate(records)
+        if actual_indent == indent and content.startswith("- ")
+    ]
+    return [
+        records[start : starts[index + 1] if index + 1 < len(starts) else len(records)]
+        for index, start in enumerate(starts)
+    ]
+
+
 def _assert_ci_contract(payload: str) -> None:
     """Validate the required GitHub Actions subset with YAML 1.2 key semantics."""
 
@@ -142,12 +189,48 @@ def _assert_ci_contract(payload: str) -> None:
     assert python_matrix == ["3.11", "3.12"]
 
     steps = _mapping_block(test_job, "steps", 4)
+    step_blocks = _sequence_item_blocks(steps, 6)
+    setup_python_steps = [
+        block
+        for block in step_blocks
+        if block[0] == (6, "- uses: actions/setup-python@v5")
+    ]
+    assert len(setup_python_steps) == 1, "expected one actions/setup-python@v5 step"
+    setup_python_with = _mapping_block(setup_python_steps[0], "with", 8)
+    python_versions = [
+        content.removeprefix("python-version:").strip()
+        for indent, content in setup_python_with
+        if indent == 10 and content.startswith("python-version:")
+    ]
+    assert python_versions == ["${{ matrix.python }}"]
+
     run_commands = [
         content.removeprefix("- run:").strip()
         for indent, content in steps
         if indent == 6 and content.startswith("- run:")
     ]
     assert run_commands == list(CI_RUN_COMMANDS)
+
+
+def _assert_cache_ignore_contract(payload: str, workspace: Path) -> None:
+    repository = workspace / "cache-ignore-repository"
+    repository.mkdir()
+    (repository / ".gitignore").write_text(payload, encoding="utf-8")
+    initialized = subprocess.run(
+        ("git", "init", "--quiet"),
+        cwd=repository,
+        text=True,
+        capture_output=True,
+    )
+    assert initialized.returncode == 0, initialized.stderr
+    for path in CACHE_PROBES:
+        ignored = subprocess.run(
+            ("git", "check-ignore", "--quiet", "--", path),
+            cwd=repository,
+            text=True,
+            capture_output=True,
+        )
+        assert ignored.returncode == 0, f"cache directory rule does not ignore {path}"
 
 
 @pytest.mark.parametrize("forbidden", ("__py" "cache__", ".pytest" "_cache"))
@@ -163,16 +246,24 @@ def test_every_cache_token_is_forbidden_in_paths_and_payloads(
         _assert_allowed(path, payload)
 
 
-def test_cache_globs_still_ignore_python_and_pytest_cache_members():
+def test_cache_globs_still_ignore_python_and_pytest_cache_members(tmp_path: Path):
     """Catches obfuscated forbidden-token removal that stops ignoring caches."""
 
-    cache_paths = (
-        "scratch/" "__py" "cache__/module.pyc",
-        "scratch/" ".pytest" "_cache/state",
-    )
-    for path in cache_paths:
-        ignored = _run("git", "check-ignore", "--quiet", path)
-        assert ignored.returncode == 0, path
+    payload = (REPOSITORY / ".gitignore").read_text(encoding="utf-8")
+    _assert_cache_ignore_contract(payload, tmp_path)
+
+
+@pytest.mark.parametrize(("original", "replacement"), CACHE_RULE_MUTATIONS)
+def test_cache_contract_rejects_directory_rule_mutations(
+    tmp_path: Path, original: str, replacement: str
+):
+    """Catches either cache-directory rule being removed or broken."""
+
+    payload = (REPOSITORY / ".gitignore").read_text(encoding="utf-8")
+    assert original in payload
+    mutated = payload.replace(original, replacement, 1)
+    with pytest.raises(AssertionError):
+        _assert_cache_ignore_contract(mutated, tmp_path)
 
 
 def test_ci_workflow_has_the_release_contract():

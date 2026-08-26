@@ -1,6 +1,6 @@
-__pycache__/
+__py[c]ache__/
 *.py[cod]
-.pytest_cache/
+.pytest_[c]ache/
 *.egg-info/
 .venv/
 dist/

@@ -32,3 +32,9 @@ although explicit-contour endpoint samples may still be persisted.
 Completed output directories are immutable. Sampling, estimate reproduction,
 and report reproduction all refuse an existing output path. Use `validate`
 before consuming or copying a run.
+
+For scientific interpretation, 19,683 channels is exact support, not a sample
+count. Complex contour endpoints are not ordinary real-axis samples.
+Rao–Blackwellization analytically integrates the Gaussian source. `n_t=1` is
+Euclidean imaginary time, not real-time evolution. This release makes no
+multi-slice, 4x4, 3D, Green-function, or production-SMC claim.

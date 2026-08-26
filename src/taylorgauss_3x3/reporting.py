@@ -43,6 +43,14 @@ def _render_html(run: dict[str, Any], estimate: dict[str, Any]) -> str:
 <p><strong>Uncertainty:</strong> {html.escape(uncertainty)}</p>
 <img src="figures/estimates.svg" alt="Stored estimate">
 <p>This offline report uses only completed stored content.</p>
+<h2>Scientific interpretation boundary</h2>
+<ul>
+<li>19,683 channels is exact support, not a sample count.</li>
+<li>Complex contour endpoints are not ordinary real-axis samples.</li>
+<li>Rao–Blackwellization analytically integrates the Gaussian source.</li>
+<li>n_t=1 is Euclidean imaginary time, not real-time evolution.</li>
+<li>This release makes no multi-slice, 4x4, 3D, Green-function, or production-SMC claim.</li>
+</ul>
 </body></html>
 """
 

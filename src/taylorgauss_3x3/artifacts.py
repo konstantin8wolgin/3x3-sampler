@@ -28,6 +28,7 @@ from .reporting import _render_html, _render_svg
 from .sampling import (
     ChannelAllocation,
     LogComponentStatistics,
+    _RNG_SCIENCE_ALGORITHM_VERSION,
     _counter_torch_seed,
     _estimate_from_log_statistics,
     _log_component_statistics,
@@ -331,6 +332,7 @@ def _base_run(config: ExactRunConfig | StochasticRunConfig) -> dict[str, Any]:
                 "channel_design": config.channel_design,
                 "chunk_size": config.chunk_size,
                 "endpoint_persistence": bool(config.persist_endpoints),
+                "rng_science_algorithm_version": _RNG_SCIENCE_ALGORITHM_VERSION,
                 "sample_count": config.samples,
                 "seed": config.seed,
             }
@@ -382,6 +384,7 @@ def _finish_sample_writer(writer: ZarrStreamWriter, config: StochasticRunConfig)
         {
             "chunk_size": config.chunk_size,
             "format": "zarr-v2",
+            "rng_science_algorithm_version": _RNG_SCIENCE_ALGORITHM_VERSION,
             "sample_count": config.samples,
             "schema_version": SCHEMA_VERSION,
         }
@@ -672,6 +675,7 @@ def _validate_scope(run: dict[str, Any]) -> None:
                 "channel_design",
                 "chunk_size",
                 "endpoint_persistence",
+                "rng_science_algorithm_version",
                 "sample_count",
                 "seed",
             }
@@ -682,6 +686,12 @@ def _validate_scope(run: dict[str, Any]) -> None:
         raise ArtifactValidationError("run.json has an invalid public artifact schema")
     if run.get("model") != "hubbard_auxiliary_field_exponential":
         raise ArtifactValidationError("run model is outside the public exact authority")
+    if (
+        run.get("method") in {EXPLICIT_STOCHASTIC_METHOD, RB_STOCHASTIC_METHOD}
+        and run.get("rng_science_algorithm_version")
+        != _RNG_SCIENCE_ALGORITHM_VERSION
+    ):
+        raise ArtifactValidationError("run RNG science algorithm version is unsupported")
     if run.get("geometry") != "periodic_3x3" or run.get("field_shape") != [1, 3, 3]:
         raise ArtifactValidationError("run geometry or field shape is outside fixed scope")
     if type(run.get("euclidean_time_slices")) is not int or run["euclidean_time_slices"] != 1:
@@ -787,10 +797,18 @@ def _validate_stored_contract(
     if not should_persist:
         return
     attrs, arrays = zarr_metadata(samples)
-    if set(attrs) != {"chunk_size", "format", "sample_count", "schema_version"}:
+    if set(attrs) != {
+        "chunk_size",
+        "format",
+        "rng_science_algorithm_version",
+        "sample_count",
+        "schema_version",
+    }:
         raise ArtifactValidationError("samples.zarr attributes have an invalid schema")
     if (
         attrs.get("format") != "zarr-v2"
+        or attrs.get("rng_science_algorithm_version")
+        != _RNG_SCIENCE_ALGORITHM_VERSION
         or type(attrs.get("schema_version")) is not int
         or attrs["schema_version"] != SCHEMA_VERSION
         or type(attrs.get("sample_count")) is not int

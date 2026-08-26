@@ -134,5 +134,11 @@ observables. Requests outside that boundary fail instead of changing the
 target. Read [`docs/limitations.md`](docs/limitations.md) before interpreting
 results.
 
+Scientific interpretation is equally fixed: 19,683 channels is exact support,
+not a sample count. Complex contour endpoints are not ordinary real-axis
+samples. Rao–Blackwellization analytically integrates the Gaussian source.
+`n_t=1` is Euclidean imaginary time, not real-time evolution. This release
+makes no multi-slice, 4x4, 3D, Green-function, or production-SMC claim.
+
 To cite version `0.1.0`, use [`CITATION.cff`](CITATION.cff). The software is
 licensed under the [Apache License 2.0](LICENSE).

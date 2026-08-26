@@ -143,6 +143,19 @@ def test_existing_output_is_refused_before_any_reuse(exact_run: Path):
     assert (exact_run / "hashes.json").read_bytes() == before
 
 
+def test_stochastic_artifacts_declare_the_versioned_rng_science_stream(
+    statistic_run: Path, endpoint_run: Path
+):
+    """Catches seeded outputs lacking the algorithm identity needed for replay."""
+
+    expected = "tg3x3-record-indexed-exact-rational-v2"
+    for run_directory in (statistic_run, endpoint_run):
+        run = _read_json(run_directory / "run.json")
+        assert run["rng_science_algorithm_version"] == expected
+    endpoint_attrs = _read_json(endpoint_run / "samples.zarr" / ".zattrs")
+    assert endpoint_attrs["rng_science_algorithm_version"] == expected
+
+
 def test_hash_manifest_is_ordered_complete_and_content_addressed(exact_run: Path):
     """Catches nondeterministic manifests or unhashed completed content."""
 

@@ -13,7 +13,7 @@ import pytest
 
 from taylorgauss_3x3 import api
 from taylorgauss_3x3.artifacts import derive_estimates, validate_run, write_run
-from taylorgauss_3x3.config import StochasticRunConfig
+from taylorgauss_3x3.config import ExactRunConfig, StochasticRunConfig
 from taylorgauss_3x3.core import Hubbard3x3Target
 from taylorgauss_3x3.core.observables import approved_observables
 from taylorgauss_3x3.reporting import render_report
@@ -65,6 +65,43 @@ def test_offline_derivation_rejects_overflowed_sufficient_statistics(tmp_path: P
 
     with pytest.raises(ValueError, match="nonfinite|finite"):
         derive_estimates(copied)
+
+
+def test_generated_report_and_public_docs_state_scientific_boundaries(
+    tmp_path: Path,
+):
+    """Catches outputs that invite unsupported physical interpretations."""
+
+    run = tmp_path / "exact-boundary-report"
+    api.run_exact(ExactRunConfig(), run)
+    report = " ".join(
+        (run / "report.html").read_text(encoding="utf-8").lower().split()
+    )
+    repository = Path(__file__).resolve().parents[1]
+    documents = {
+        "README.md": " ".join(
+            (repository / "README.md").read_text(encoding="utf-8").lower().split()
+        ),
+        "docs/limitations.md": " ".join(
+            (repository / "docs/limitations.md")
+            .read_text(encoding="utf-8")
+            .lower()
+            .split()
+        ),
+        "report.html": report,
+    }
+    required = (
+        ("19,683", "exact support", "not a sample count"),
+        ("complex contour endpoints", "not ordinary real-axis samples"),
+        ("rao–blackwellization", "analytically integrates", "gaussian source"),
+        ("n_t=1", "euclidean imaginary time", "not real-time evolution"),
+        ("no multi-slice", "4x4", "3d", "green-function", "production-smc"),
+    )
+    for name, payload in documents.items():
+        for statement in required:
+            assert all(fragment in payload for fragment in statement), (
+                f"{name} omits scientific boundary fragments {statement}"
+            )
 
 
 def test_offline_derivation_rejects_nonfinite_persisted_endpoints(tmp_path: Path):

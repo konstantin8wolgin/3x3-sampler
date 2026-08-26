@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tarfile
 import tomllib
 import zipfile
 
@@ -30,8 +31,18 @@ CI_MUTATIONS = (
     ("on:\n", "true:\n"),
     ("  push:\n", ""),
     ("  pull_request:\n", ""),
+    ("  test:\n", "  test:\n    name: renamed\n"),
     ('        python: ["3.11", "3.12"]', '        python: ["3.10", "3.12"]'),
     ('        python: ["3.11", "3.12"]', '        python: ["3.11", "3.13"]'),
+    ("      - uses: actions/checkout@v5\n", ""),
+    (
+        "      - uses: actions/checkout@v5\n",
+        "      - uses: actions/checkout@v4\n",
+    ),
+    (
+        "      - uses: actions/setup-python@v6\n",
+        "      - uses: actions/setup-python@v5\n",
+    ),
     ("      - run: python -m pip install --upgrade pip\n", ""),
     ("      - run: python -m pip install -e '.[dev]'\n", ""),
     ("      - run: python -m pytest\n", ""),
@@ -42,7 +53,7 @@ CI_MUTATIONS = (
         "",
     ),
     (
-        "      - uses: actions/setup-python@v5\n"
+        "      - uses: actions/setup-python@v6\n"
         "        with:\n"
         "          python-version: ${{ matrix.python }}\n"
         "          cache: pip\n",
@@ -53,15 +64,15 @@ CI_MUTATIONS = (
         "          python-version: 3.12\n",
     ),
     (
-        "      - uses: actions/setup-python@v5\n"
+        "      - uses: actions/setup-python@v6\n"
         "        with:\n"
         "          python-version: ${{ matrix.python }}\n"
         "          cache: pip\n",
-        "      - uses: actions/setup-python@v5\n"
+        "      - uses: actions/setup-python@v6\n"
         "        with:\n"
         "          python-version: ${{ matrix.python }}\n"
         "          cache: pip\n"
-        "      - uses: actions/setup-python@v5\n"
+        "      - uses: actions/setup-python@v6\n"
         "        with:\n"
         "          python-version: ${{ matrix.python }}\n"
         "          cache: pip\n",
@@ -176,6 +187,10 @@ def _assert_ci_contract(payload: str) -> None:
 
     jobs = _mapping_block(records, "jobs", 0)
     test_job = _mapping_block(jobs, "test", 2)
+    assert not any(
+        indent == 4 and content.startswith("name:")
+        for indent, content in test_job
+    ), "the test job name must remain implicit for protected matrix contexts"
     strategy = _mapping_block(test_job, "strategy", 4)
     matrix = _mapping_block(strategy, "matrix", 6)
     python_values = [
@@ -192,12 +207,18 @@ def _assert_ci_contract(payload: str) -> None:
 
     steps = _mapping_block(test_job, "steps", 4)
     step_blocks = _sequence_item_blocks(steps, 6)
+    checkout_steps = [
+        block
+        for block in step_blocks
+        if block[0] == (6, "- uses: actions/checkout@v5")
+    ]
+    assert len(checkout_steps) == 1, "expected one actions/checkout@v5 step"
     setup_python_steps = [
         block
         for block in step_blocks
-        if block[0] == (6, "- uses: actions/setup-python@v5")
+        if block[0] == (6, "- uses: actions/setup-python@v6")
     ]
-    assert len(setup_python_steps) == 1, "expected one actions/setup-python@v5 step"
+    assert len(setup_python_steps) == 1, "expected one actions/setup-python@v6 step"
     setup_python_with = _mapping_block(setup_python_steps[0], "with", 8)
     python_versions = [
         content.removeprefix("python-version:").strip()
@@ -390,3 +411,37 @@ def test_wheel_members_are_public_and_have_only_public_dependencies(
                 metadata_members.append(member)
 
     assert len(metadata_members) == 1
+
+
+def test_built_sdist_contains_the_canonical_anchor_required_by_its_tests(
+    tmp_path: Path,
+):
+    """Catches a source archive whose exact-observables test lacks its fixture."""
+
+    dist_directory = tmp_path / "dist"
+    built = _run(
+        sys.executable,
+        "-m",
+        "build",
+        "--sdist",
+        "--no-isolation",
+        "--outdir",
+        str(dist_directory),
+        ".",
+    )
+    assert built.returncode == 0, built.stdout + built.stderr
+    archives = list(dist_directory.glob("taylorgauss_3x3-*.tar.gz"))
+    assert len(archives) == 1
+
+    with tarfile.open(archives[0], mode="r:gz") as archive:
+        roots = {Path(name).parts[0] for name in archive.getnames() if name}
+        assert len(roots) == 1
+        root = roots.pop()
+        assert archive.getmember(
+            f"{root}/tests/test_exact_observables.py"
+        ).isfile()
+        fixture = archive.extractfile(
+            f"{root}/tests/fixtures/canonical-anchor.json"
+        )
+        assert fixture is not None
+        assert "mixed_linear_quadratic" in json.loads(fixture.read())

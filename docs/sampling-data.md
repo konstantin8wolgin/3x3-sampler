@@ -39,8 +39,14 @@ tg-3x3 validate PATH
 `value.real` and `value.imag` are the observable's real and imaginary
 components. The example's numbers are illustrative. Exact enumeration returns
 `null` standard errors because all channels and Gaussian moments are
-integrated. Stochastic runs return finite nonnegative componentwise Monte
-Carlo standard errors.
+integrated. Stochastic runs of the polynomial observables return finite
+nonnegative componentwise Monte Carlo standard errors.
+
+`physical_log_partition` is a structural observable: `value.real` is the
+analytically determined physical log partition, `value.imag` is zero, and both
+standard-error fields are `null`, including under a stochastic method. That
+value is independent of sampled channels, Gaussian sources, and sample count;
+requested explicit-contour endpoint samples may still be persisted.
 
 ## Channel allocation and endpoint storage
 

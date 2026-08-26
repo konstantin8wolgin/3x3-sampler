@@ -609,10 +609,32 @@ def _load_completed(run_directory: str | Path) -> tuple[Path, dict[str, Any], di
     if run.get("state") != "completed":
         raise ArtifactValidationError("run state must be completed")
     summary = read_json(directory / "summary.json")
-    if not isinstance(summary, dict) or summary.get("state") != "completed":
+    if not isinstance(summary, dict) or set(summary) != {
+        "estimate",
+        "exact_support",
+        "schema_version",
+        "state",
+        "valid",
+    }:
+        raise ArtifactValidationError("summary.json has an invalid exact schema")
+    if summary.get("state") != "completed":
         raise ArtifactValidationError("summary state must be completed")
     if type(summary.get("schema_version")) is not int or summary["schema_version"] != SCHEMA_VERSION:
         raise ArtifactValidationError("summary schema_version must be an integer supported version")
+    exact_support = summary["exact_support"]
+    if not isinstance(exact_support, dict) or set(exact_support) != {
+        "count",
+        "ordered",
+    }:
+        raise ArtifactValidationError("summary exact_support has an invalid schema")
+    if (
+        type(exact_support.get("count")) is not int
+        or exact_support["count"] != EXACT_SUPPORT_COUNT
+        or exact_support.get("ordered") is not True
+    ):
+        raise ArtifactValidationError(
+            "summary exact_support must declare exactly 19,683 ordered channels"
+        )
     rows = _strict_json_lines(directory / "estimates.jsonl")
     derived = _derive_from_rows(rows)
     if summary.get("estimate") != derived:

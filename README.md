@@ -89,8 +89,9 @@ Each run's `summary.json` contains:
 - `estimate.value.real` and `estimate.value.imag`: the two components of the
   observable estimate;
 - `estimate.standard_error_real` and
-  `estimate.standard_error_imag`: componentwise Monte Carlo standard errors,
-  or `null` when the value is analytically exact;
+  `estimate.standard_error_imag`: componentwise Monte Carlo standard errors
+  for stochastic polynomial estimates, or `null` when the value is
+  analytically determined;
 - `state`, `valid`, and `schema_version`: completion, validation, and schema
   metadata.
 
@@ -110,13 +111,20 @@ components. The canonical default-parameter values and the float64/complex128
 comparison tolerance are recorded in
 [`docs/mathematical-contract.md`](docs/mathematical-contract.md).
 
-For either stochastic method, the value fields are estimates and the two
-standard-error fields quantify finite-sample uncertainty separately for the
-real and imaginary components. A single estimate is not required to equal the
-exact value, and one standard error is not a deterministic accuracy bound.
-Physical validation should compare repeated seeded runs with the exact
-enumeration reference and check componentwise uncertainty calibration; it
-should not judge accuracy from channel coverage or sample count alone.
+For either stochastic method and one of the three polynomial observables, the
+value fields are estimates and the two standard-error fields quantify
+finite-sample uncertainty separately for the real and imaginary components. A
+single estimate is not required to equal the exact value, and one standard
+error is not a deterministic accuracy bound. Physical validation should
+compare repeated seeded runs with the exact-enumeration reference and check
+componentwise uncertainty calibration; it should not judge accuracy from
+channel coverage or sample count alone.
+
+`physical_log_partition` is the structural exception for stochastic runs:
+`value.real` is the analytically determined physical log partition,
+`value.imag` is zero, and both standard-error fields are `null`. Its reported
+value does not depend on sampled channels, Gaussian sources, or sample count;
+an explicit-contour run may still persist its requested endpoint samples.
 
 ## Limitations and citation
 

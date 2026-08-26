@@ -165,6 +165,50 @@ def test_hash_manifest_is_ordered_complete_and_content_addressed(exact_run: Path
         assert entry["size_bytes"] == len(payload)
 
 
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "wrong-count",
+        "wrong-ordering",
+        "missing-summary-key",
+        "extra-summary-key",
+        "missing-support-key",
+        "extra-support-key",
+    ],
+)
+def test_validation_rejects_rehashed_summary_schema_and_support_tampering(
+    exact_run: Path, tmp_path: Path, tamper: str
+):
+    """Catches exact-support claims remaining outside semantic validation."""
+
+    copied = _copy_run(exact_run, tmp_path / tamper)
+    summary = _read_json(copied / "summary.json")
+    support = summary["exact_support"]
+    if tamper == "wrong-count":
+        support["count"] = 1
+    elif tamper == "wrong-ordering":
+        support["ordered"] = False
+    elif tamper == "missing-summary-key":
+        del summary["exact_support"]
+    elif tamper == "extra-summary-key":
+        summary["unexpected"] = True
+    elif tamper == "missing-support-key":
+        del support["ordered"]
+    else:
+        support["unexpected"] = True
+    (copied / "summary.json").write_text(
+        json.dumps(summary, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    _refresh_hashes(copied)
+
+    with pytest.raises(
+        ArtifactValidationError,
+        match="summary.*schema|exact_support",
+    ):
+        validate_run(copied)
+
+
 def test_completed_layout_rejects_an_unexpected_empty_directory(
     exact_run: Path, tmp_path: Path
 ):

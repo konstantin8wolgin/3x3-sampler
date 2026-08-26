@@ -224,6 +224,44 @@ def test_stochastic_methods_and_channel_designs_are_the_only_cli_choices(
     assert SCOPE in unsupported_design.stderr
 
 
+def test_public_field_docs_match_structural_stochastic_output(
+    tmp_path: Path, installed_tg_3x3: str
+):
+    """Catches public SE/value definitions contradicting structural output."""
+
+    output = tmp_path / "physical-log-partition"
+    result = _run(
+        installed_tg_3x3,
+        "sample",
+        "--method",
+        "exact-contour-rb",
+        "--observable",
+        "physical_log_partition",
+        "--samples",
+        "2",
+        "--output",
+        str(output),
+    )
+    assert result.returncode == 0, result.stderr
+    summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+    assert summary["estimate"] == {
+        "standard_error_imag": None,
+        "standard_error_real": None,
+        "value": {"imag": 0.0, "real": pytest.approx(32.36358464798972)},
+    }
+
+    for relative in ("README.md", "docs/sampling-data.md", "docs/limitations.md"):
+        paragraphs = (REPOSITORY / relative).read_text(encoding="utf-8").split("\n\n")
+        matching = [
+            paragraph.lower()
+            for paragraph in paragraphs
+            if "`physical_log_partition`" in paragraph and "`null`" in paragraph
+        ]
+        assert matching, f"{relative} omits the structural null-SE exception"
+        assert "physical log partition" in matching[0]
+        assert "sample" in matching[0]
+
+
 @pytest.mark.parametrize(
     ("script", "output", "expected_samples"),
     [

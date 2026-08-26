@@ -18,9 +18,16 @@ in [`mathematical-contract.md`](mathematical-contract.md); arbitrary callbacks
 are not accepted.
 
 An exact-enumeration result has analytic uncertainty fields set to `null`.
-Stochastic standard errors cover finite-sample variability of the reported
-observable components. They do not cover model mismatch, altered physical
-parameters, or an observable outside the approved contract.
+For a stochastic polynomial estimate, standard errors cover finite-sample
+variability of the reported observable components. They do not cover model
+mismatch, altered physical parameters, or an observable outside the approved
+contract.
+
+`physical_log_partition` is structural even when requested with a stochastic
+method: its real value is the analytically determined physical log partition,
+its imaginary value is zero, and both standard errors are `null`. The value
+does not depend on the sampled channels, Gaussian sources, or sample count,
+although explicit-contour endpoint samples may still be persisted.
 
 Completed output directories are immutable. Sampling, estimate reproduction,
 and report reproduction all refuse an existing output path. Use `validate`

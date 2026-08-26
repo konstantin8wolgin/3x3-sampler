@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+import stat
 from typing import Any, Iterator, Mapping
 
 import numpy as np
@@ -91,6 +92,24 @@ def _as_numpy(value: torch.Tensor | np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(value)
 
 
+def _filesystem_entries(directory: Path, location: str) -> dict[str, tuple[Path, int]]:
+    """Inspect direct children without following or opening unsupported nodes."""
+
+    try:
+        paths = list(directory.iterdir())
+        entries = {path.name: (path, path.lstat().st_mode) for path in paths}
+    except OSError as exc:
+        raise ValueError(f"{location} could not be inspected") from exc
+    for name, (_, mode) in entries.items():
+        if stat.S_ISLNK(mode):
+            raise ValueError(f"{location} must not contain symlinks: {name}")
+        if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+            raise ValueError(
+                f"{location} contains unsupported special filesystem content: {name}"
+            )
+    return entries
+
+
 class ZarrStreamWriter:
     """Write a fixed-shape, uncompressed Zarr v2 group one chunk at a time."""
 
@@ -174,6 +193,28 @@ class ZarrStreamWriter:
 
 
 def zarr_metadata(directory: Path) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    try:
+        root_mode = directory.lstat().st_mode
+    except OSError as exc:
+        raise ValueError("samples.zarr must be a directory") from exc
+    if stat.S_ISLNK(root_mode) or not stat.S_ISDIR(root_mode):
+        raise ValueError("samples.zarr must be a directory")
+    root_nodes = _filesystem_entries(directory, "samples.zarr")
+    array_directories = sorted(
+        path
+        for path, mode in root_nodes.values()
+        if stat.S_ISDIR(mode)
+    )
+    expected_root = {".zgroup", ".zattrs"} | {
+        path.name for path in array_directories
+    }
+    if set(root_nodes) != expected_root:
+        raise ValueError("samples.zarr contains unexpected root content")
+    if any(
+        name not in root_nodes or not stat.S_ISREG(root_nodes[name][1])
+        for name in (".zgroup", ".zattrs")
+    ):
+        raise ValueError("samples.zarr is missing regular group metadata")
     group = read_json(directory / ".zgroup")
     if (
         not isinstance(group, dict)
@@ -185,13 +226,22 @@ def zarr_metadata(directory: Path) -> tuple[dict[str, Any], dict[str, dict[str, 
     attrs = read_json(directory / ".zattrs")
     if not isinstance(attrs, dict):
         raise ValueError("samples.zarr attributes must be an object")
-    root_entries = {path.name for path in directory.iterdir()}
-    if not {".zgroup", ".zattrs"}.issubset(root_entries):
-        raise ValueError("samples.zarr is missing group metadata")
-    if any((directory / name).is_file() for name in root_entries - {".zgroup", ".zattrs"}):
-        raise ValueError("samples.zarr contains an unexpected root file")
     arrays: dict[str, dict[str, Any]] = {}
-    for array_directory in sorted(path for path in directory.iterdir() if path.is_dir()):
+    for array_directory in array_directories:
+        array_nodes = _filesystem_entries(
+            array_directory, f"samples.zarr/{array_directory.name}"
+        )
+        if any(not stat.S_ISREG(mode) for _, mode in array_nodes.values()):
+            raise ValueError(
+                f"invalid Zarr array layout: {array_directory.name}"
+            )
+        if any(
+            name not in array_nodes or not stat.S_ISREG(array_nodes[name][1])
+            for name in (".zarray", ".zattrs")
+        ):
+            raise ValueError(
+                f"invalid Zarr array metadata layout: {array_directory.name}"
+            )
         metadata = read_json(array_directory / ".zarray")
         required = {
             "chunks", "compressor", "dtype", "fill_value", "filters",
@@ -228,15 +278,14 @@ def zarr_metadata(directory: Path) -> tuple[dict[str, Any], dict[str, dict[str, 
         for start in range(0, shape[0], chunks[0]):
             key = ".".join((str(start // chunks[0]), *("0" for _ in shape[1:])))
             expected.add(key)
-            chunk_path = array_directory / key
-            try:
-                size = chunk_path.stat().st_size
-            except OSError as exc:
-                raise ValueError(f"missing Zarr chunk: {array_directory.name}/{key}") from exc
+            if key not in array_nodes:
+                raise ValueError(f"missing Zarr chunk: {array_directory.name}/{key}")
+            chunk_path = array_nodes[key][0]
+            size = chunk_path.lstat().st_size
             expected_size = int(np.prod(chunks, dtype=np.int64)) * dtype.itemsize
             if size != expected_size:
                 raise ValueError(f"truncated Zarr chunk: {array_directory.name}/{key}")
-        if {path.name for path in array_directory.iterdir()} != expected:
+        if set(array_nodes) != expected:
             raise ValueError(f"unexpected or missing Zarr chunk: {array_directory.name}")
         arrays[array_directory.name] = metadata
     return attrs, arrays

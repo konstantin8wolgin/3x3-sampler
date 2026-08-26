@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -171,6 +173,36 @@ def test_completed_layout_rejects_an_unexpected_empty_directory(
     copied = _copy_run(exact_run, tmp_path / "unexpected-directory")
     (copied / "unexpected").mkdir()
     with pytest.raises(ValueError, match="content|layout|unexpected"):
+        validate_run(copied)
+
+
+@pytest.mark.parametrize("placement", ["zarr-root", "array-directory"])
+def test_validation_rejects_special_zarr_nodes_before_hash_or_science_reads(
+    endpoint_run: Path, tmp_path: Path, placement: str
+):
+    """Catches unhashed special nodes being ignored by completed-run traversal."""
+
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("platform does not provide FIFO creation")
+    copied = _copy_run(endpoint_run, tmp_path / f"special-node-{placement}")
+    parent = copied / "samples.zarr"
+    if placement == "array-directory":
+        parent /= "channel_id"
+    special = parent / "unhashed-special-entry"
+    try:
+        os.mkfifo(special)
+    except NotImplementedError:
+        pytest.skip("platform does not implement FIFO creation")
+    except OSError as exc:
+        unsupported = {errno.ENOSYS, errno.ENOTSUP, errno.EOPNOTSUPP}
+        if exc.errno in unsupported:
+            pytest.skip("test filesystem does not support FIFOs")
+        raise
+
+    with pytest.raises(
+        ArtifactValidationError,
+        match="unsupported special filesystem content",
+    ):
         validate_run(copied)
 
 

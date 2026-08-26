@@ -8,6 +8,7 @@ import json
 import math
 from pathlib import Path
 import shutil
+import stat
 from typing import Any, Iterable
 
 import numpy as np
@@ -237,11 +238,38 @@ def _write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
             handle.write(json_bytes(row))
 
 
+def _validated_content_entries(directory: Path) -> list[tuple[Path, int]]:
+    """Return run entries only after rejecting symlinks and special nodes."""
+
+    entries: list[tuple[Path, int]] = []
+    try:
+        for path in directory.rglob("*"):
+            mode = path.lstat().st_mode
+            relative = path.relative_to(directory).as_posix()
+            if stat.S_ISLNK(mode):
+                raise ArtifactValidationError(
+                    f"completed run content must not contain symlinks: {relative}"
+                )
+            if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+                raise ArtifactValidationError(
+                    "completed run contains unsupported special filesystem "
+                    f"content: {relative}"
+                )
+            entries.append((path, mode))
+    except ArtifactValidationError:
+        raise
+    except OSError as exc:
+        raise ArtifactValidationError(
+            "completed run content could not be inspected"
+        ) from exc
+    return entries
+
+
 def _manifest_files(run_directory: Path) -> list[dict[str, Any]]:
     paths = sorted(
         path.relative_to(run_directory).as_posix()
-        for path in run_directory.rglob("*")
-        if path.is_file() and path.name != "hashes.json"
+        for path, mode in _validated_content_entries(run_directory)
+        if stat.S_ISREG(mode) and path.name != "hashes.json"
     )
     return [
         {
@@ -506,8 +534,8 @@ def _validate_manifest(run_directory: Path) -> None:
         raise ArtifactValidationError("invalid hash manifest")
     expected_paths = sorted(
         path.relative_to(run_directory).as_posix()
-        for path in run_directory.rglob("*")
-        if path.is_file() and path.name != "hashes.json"
+        for path, mode in _validated_content_entries(run_directory)
+        if stat.S_ISREG(mode) and path.name != "hashes.json"
     )
     if any(not isinstance(entry, dict) for entry in manifest["files"]):
         raise ArtifactValidationError("invalid hash manifest entry")
@@ -529,10 +557,13 @@ def _validate_manifest(run_directory: Path) -> None:
 
 
 def _validate_layout(directory: Path) -> None:
-    if not directory.is_dir() or directory.is_symlink():
+    try:
+        root_mode = directory.lstat().st_mode
+    except OSError as exc:
+        raise ArtifactValidationError("completed run must be a directory") from exc
+    if stat.S_ISLNK(root_mode) or not stat.S_ISDIR(root_mode):
         raise ArtifactValidationError("completed run must be a directory")
-    if any(path.is_symlink() for path in directory.rglob("*")):
-        raise ArtifactValidationError("completed run content must not contain symlinks")
+    _validated_content_entries(directory)
     required_root = {
         "estimates.jsonl",
         "figures",

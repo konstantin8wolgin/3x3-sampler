@@ -282,7 +282,13 @@ def zarr_metadata(directory: Path) -> tuple[dict[str, Any], dict[str, dict[str, 
                 raise ValueError(f"missing Zarr chunk: {array_directory.name}/{key}")
             chunk_path = array_nodes[key][0]
             size = chunk_path.lstat().st_size
-            expected_size = int(np.prod(chunks, dtype=np.int64)) * dtype.itemsize
+            expected_size = dtype.itemsize
+            for dimension in chunks:
+                if expected_size > size // dimension:
+                    raise ValueError(
+                        f"truncated Zarr chunk: {array_directory.name}/{key}"
+                    )
+                expected_size *= dimension
             if size != expected_size:
                 raise ValueError(f"truncated Zarr chunk: {array_directory.name}/{key}")
         if set(array_nodes) != expected:

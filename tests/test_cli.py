@@ -79,6 +79,19 @@ def _digest_tree(root: Path) -> str:
     return digest.hexdigest()
 
 
+def _refresh_hashes(run: Path) -> None:
+    manifest_path = run / "hashes.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for entry in manifest["files"]:
+        payload = (run / entry["path"]).read_bytes()
+        entry["sha256"] = hashlib.sha256(payload).hexdigest()
+        entry["size_bytes"] = len(payload)
+    manifest_path.write_text(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+
 def test_exact_cli_journey_and_immutable_offline_derivatives(
     tmp_path: Path, installed_tg_3x3: str
 ):
@@ -152,6 +165,48 @@ def test_exact_cli_journey_and_immutable_offline_derivatives(
     assert "immutable output already exists" in reused.stderr
     assert SCOPE in reused.stderr
     assert _digest_tree(output) == before
+
+
+def test_cli_rejects_rehashed_huge_zarr_dimension_without_traceback(
+    tmp_path: Path, installed_tg_3x3: str
+):
+    """Catches hostile endpoint dimensions escaping as a raw OverflowError."""
+
+    output = tmp_path / "hostile-zarr-dimension"
+    sampled = _run(
+        installed_tg_3x3,
+        "sample",
+        "--method",
+        "exact-contour",
+        "--samples",
+        "2",
+        "--seed",
+        "107",
+        "--chunk-size",
+        "2",
+        "--persist-endpoints",
+        "--output",
+        str(output),
+    )
+    assert sampled.returncode == 0, sampled.stderr
+
+    metadata_path = output / "samples.zarr" / "endpoint" / ".zarray"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    hostile_dimension = 1 << 100
+    metadata["shape"][1] = hostile_dimension
+    metadata["chunks"][1] = hostile_dimension
+    metadata_path.write_text(
+        json.dumps(metadata, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    _refresh_hashes(output)
+
+    validated = _run(installed_tg_3x3, "validate", str(output))
+
+    assert validated.returncode == 2
+    assert "Zarr" in validated.stderr
+    assert "Traceback" not in validated.stderr
+    assert "OverflowError" not in validated.stderr
 
 
 @pytest.mark.parametrize(

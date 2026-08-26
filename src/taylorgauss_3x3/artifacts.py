@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import re
 import shutil
 import stat
 from typing import Any, Iterable
@@ -729,7 +730,12 @@ def _validate_scope(run: dict[str, Any]) -> None:
             != {"operation", "source_content_sha256", "source_run_id"}
             or derivation.get("operation") not in {"estimate", "report"}
             or not isinstance(derivation.get("source_content_sha256"), str)
-            or len(derivation["source_content_sha256"]) != 64
+            or (
+                re.fullmatch(
+                    r"[0-9a-f]{64}", derivation["source_content_sha256"]
+                )
+                is None
+            )
             or not isinstance(derivation.get("source_run_id"), str)
             or derivation["source_run_id"] != run_id
         ):
@@ -954,6 +960,7 @@ def validate_run(run_directory: str | Path) -> dict[str, Any]:
         ArtifactValidationError,
         FileNotFoundError,
         OSError,
+        OverflowError,
         RecursionError,
         TypeError,
         ValueError,

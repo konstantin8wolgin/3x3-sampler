@@ -452,6 +452,41 @@ def test_run_id_is_bound_to_the_stored_configuration(exact_run: Path, tmp_path: 
         validate_run(copied)
 
 
+@pytest.mark.parametrize(
+    ("source_digest", "is_valid"),
+    [
+        ("0" * 64, True),
+        ("A" * 64, False),
+        ("g" * 64, False),
+    ],
+    ids=("lowercase-hex", "uppercase-hex", "non-hex"),
+)
+def test_derivation_source_digest_requires_exact_lowercase_sha256_grammar(
+    exact_run: Path,
+    tmp_path: Path,
+    source_digest: str,
+    is_valid: bool,
+):
+    """Catches noncanonical lineage digests accepted after artifact rehashing."""
+
+    derivative = derive_estimates(exact_run, tmp_path / "derivative")
+    assert isinstance(derivative, Path)
+    run_path = derivative / "run.json"
+    run = _read_json(run_path)
+    run["derivation"]["source_content_sha256"] = source_digest
+    run_path.write_text(
+        json.dumps(run, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    _refresh_hashes(derivative)
+
+    if is_valid:
+        assert validate_run(derivative)["valid"] is True
+    else:
+        with pytest.raises(ArtifactValidationError, match="derivation metadata"):
+            validate_run(derivative)
+
+
 @pytest.mark.parametrize("tamper", ["missing", "truncated", "reordered"])
 def test_validation_rejects_missing_truncated_or_reordered_zarr_chunks(
     endpoint_run: Path, tmp_path: Path, tamper: str

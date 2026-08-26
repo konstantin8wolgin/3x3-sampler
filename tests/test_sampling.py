@@ -81,7 +81,12 @@ def test_fixed_seed_freezes_ordered_channel_allocation_hash(canonical):
     )
     assert repeated.allocation_sha256 == first.allocation_sha256
     assert first.rng_algorithm_version == "tg3x3-record-indexed-exact-rational-v2"
-    assert bool((first.log_design_weight != 0.0).all())
+    assert torch.equal(
+        first.log_design_weight,
+        oracle.channel_log_probabilities[first.channel]
+        - first.proposal_log_probabilities[first.channel],
+    )
+    assert bool(torch.isfinite(first.log_design_weight).all())
     assert (
         different.allocation_sha256
         == "031f847802d7d316e170507c21642cbb0f206e422bf51d414e40f5ad792bf89b"
@@ -103,8 +108,9 @@ def test_stored_rational_proposal_is_the_exact_attainable_law(canonical, design)
     represented = [
         Fraction.from_float(float(value)) for value in oracle.channel_probabilities
     ]
-    represented_total = sum(represented)
-    represented = [value / represented_total for value in represented]
+    represented[max(range(len(represented)), key=represented.__getitem__)] += (
+        1 - sum(represented)
+    )
     if design == IID_CHANNEL_DESIGN:
         expected = represented
     else:
@@ -132,6 +138,38 @@ def test_integer_categorical_partition_has_exact_bin_counts():
     ]
 
     assert [selected.count(channel) for channel in range(3)] == [1, 3, 4]
+
+
+def test_represented_categorical_masses_absorb_normalization_roundoff():
+    """Catches platform roundoff changing the rejection range and seeded stream."""
+
+    from taylorgauss_3x3.sampling import _represented_integer_masses
+
+    quarter = torch.tensor(0.25, dtype=RDTYPE)
+    infinity = torch.tensor(math.inf, dtype=RDTYPE)
+    half = torch.tensor(0.5, dtype=RDTYPE)
+    above_one = torch.stack(
+        [
+            quarter,
+            torch.nextafter(quarter, infinity),
+            torch.nextafter(half, infinity),
+        ]
+    )
+    rounded_one = torch.stack(
+        [
+            quarter,
+            torch.nextafter(quarter, infinity),
+            torch.nextafter(half, torch.zeros_like(half)),
+        ]
+    )
+
+    assert _represented_integer_masses(above_one) == (
+        (4_503_599_627_370_496, 4_503_599_627_370_497, 9_007_199_254_740_991),
+        18_014_398_509_481_984,
+    )
+    assert _represented_integer_masses(rounded_one) == _represented_integer_masses(
+        above_one
+    )
 
 
 def test_paired_estimators_share_channels_and_only_explicit_draws_sources(canonical):

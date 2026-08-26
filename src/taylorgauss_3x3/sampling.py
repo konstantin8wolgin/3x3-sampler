@@ -94,14 +94,21 @@ def _represented_integer_masses(probabilities: torch.Tensor) -> tuple[tuple[int,
     ratios = [float(value).as_integer_ratio() for value in probabilities]
     exponents = [denominator.bit_length() - 1 for _, denominator in ratios]
     common_exponent = max(exponents)
-    masses = tuple(
+    masses = [
         numerator << (common_exponent - exponent)
         for (numerator, _), exponent in zip(ratios, exponents, strict=True)
-    )
-    total = sum(masses)
-    if total <= 0:
+    ]
+    denominator = 1 << common_exponent
+    if denominator <= 0 or not masses or sum(masses) <= 0:
         raise ValueError("channel probabilities must have positive represented mass")
-    return masses, total
+    # Float softmax output is normalized analytically, but its exact dyadic sum
+    # can straddle one across platforms.  Keep the RNG range fixed and assign
+    # only that normalization residual to the largest (least sensitive) bin.
+    anchor = max(range(len(masses)), key=masses.__getitem__)
+    masses[anchor] += denominator - sum(masses)
+    if any(mass < 0 for mass in masses):
+        raise ValueError("channel probabilities must have nonnegative represented mass")
+    return tuple(masses), denominator
 
 
 def _proposal_for_design(

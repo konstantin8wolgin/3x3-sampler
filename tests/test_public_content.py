@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -73,8 +74,8 @@ CI_RUN_COMMANDS = (
     "python -m pytest -q tests/test_clean_install.py tests/test_public_content.py",
 )
 CACHE_PROBES = (
-    "scratch/" "__py" "cache__/sentinel.txt",
-    "scratch/" ".pytest" "_cache/state",
+    ("scratch/" "__py" "cache__/sentinel.txt", "__py[c]ache__/"),
+    ("scratch/" ".pytest" "_cache/state", ".pytest_[c]ache/"),
 )
 CACHE_RULE_MUTATIONS = (
     ("__py[c]ache__/\n", ""),
@@ -215,22 +216,48 @@ def _assert_ci_contract(payload: str) -> None:
 def _assert_cache_ignore_contract(payload: str, workspace: Path) -> None:
     repository = workspace / "cache-ignore-repository"
     repository.mkdir()
+    isolated_home = workspace / "isolated-home"
+    isolated_home.mkdir()
+    isolated_config = workspace / "isolated-gitconfig"
+    isolated_config.write_text("", encoding="utf-8")
+    isolated_template = workspace / "isolated-git-template"
+    isolated_template.mkdir()
+    environment = {
+        key: value for key, value in os.environ.items() if not key.startswith("GIT_")
+    }
+    environment.update(
+        {
+            "GIT_CONFIG_COUNT": "0",
+            "GIT_CONFIG_GLOBAL": str(isolated_config),
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_TEMPLATE_DIR": str(isolated_template),
+            "HOME": str(isolated_home),
+            "XDG_CONFIG_HOME": str(isolated_home),
+        }
+    )
     (repository / ".gitignore").write_text(payload, encoding="utf-8")
     initialized = subprocess.run(
-        ("git", "init", "--quiet"),
+        ("git", "init", "--quiet", f"--template={isolated_template}"),
         cwd=repository,
+        env=environment,
         text=True,
         capture_output=True,
     )
     assert initialized.returncode == 0, initialized.stderr
-    for path in CACHE_PROBES:
+    for path, expected_pattern in CACHE_PROBES:
         ignored = subprocess.run(
-            ("git", "check-ignore", "--quiet", "--", path),
+            ("git", "check-ignore", "--verbose", "--", path),
             cwd=repository,
+            env=environment,
             text=True,
             capture_output=True,
         )
         assert ignored.returncode == 0, f"cache directory rule does not ignore {path}"
+        source_and_pattern, matched_path = ignored.stdout.rstrip("\n").split("\t", 1)
+        source, _, matched_pattern = source_and_pattern.split(":", 2)
+        assert source == ".gitignore"
+        assert matched_pattern == expected_pattern
+        assert matched_path == path
 
 
 @pytest.mark.parametrize("forbidden", ("__py" "cache__", ".pytest" "_cache"))
@@ -264,6 +291,26 @@ def test_cache_contract_rejects_directory_rule_mutations(
     mutated = payload.replace(original, replacement, 1)
     with pytest.raises(AssertionError):
         _assert_cache_ignore_contract(mutated, tmp_path)
+
+
+def test_cache_contract_rejects_external_excludes_false_positive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Catches user/global excludes masking both missing local cache rules."""
+
+    external_excludes = tmp_path / "external-excludes"
+    external_excludes.write_text(
+        "__py" "cache__/\n" ".pytest" "_cache/\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.excludesFile")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", str(external_excludes))
+
+    payload = (REPOSITORY / ".gitignore").read_text(encoding="utf-8")
+    for original, replacement in CACHE_RULE_MUTATIONS:
+        payload = payload.replace(original, replacement, 1)
+    with pytest.raises(AssertionError):
+        _assert_cache_ignore_contract(payload, tmp_path)
 
 
 def test_ci_workflow_has_the_release_contract():

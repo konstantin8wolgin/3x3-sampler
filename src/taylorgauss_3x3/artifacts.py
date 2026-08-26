@@ -290,6 +290,7 @@ def _write_completed(
     run = {**run, "schema_version": SCHEMA_VERSION, "state": "completed"}
     summary = {
         "estimate": estimate,
+        "exact_support": {"count": EXACT_SUPPORT_COUNT, "ordered": True},
         "schema_version": SCHEMA_VERSION,
         "state": "completed",
         "valid": True,

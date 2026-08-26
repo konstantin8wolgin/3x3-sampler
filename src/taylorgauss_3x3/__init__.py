@@ -1,3 +1,5 @@
+"""Public API for the fixed periodic 3x3, n_t=1 sampler."""
+
 from .api import (
     describe,
     estimate,

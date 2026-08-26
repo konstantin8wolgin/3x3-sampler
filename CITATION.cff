@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+title: "Taylor–Gauss 3x3 Sampler"
+version: 0.1.0
+type: software
+authors:
+  - family-names: Wolgin
+    given-names: Konstantin
+repository-code: "https://github.com/konstantin8wolgin/3x3-sampler"
+url: "https://github.com/konstantin8wolgin/3x3-sampler"
+license: Apache-2.0
+date-released: 2026-08-26

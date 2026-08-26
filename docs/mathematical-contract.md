@@ -1,99 +1,87 @@
 # Mathematical contract
 
-## Frozen scope
+## Target
 
-This package supports one model only: the periodic real-symmetric `3x3`
-nearest-neighbor Hubbard lattice with one Euclidean-time slice (`n_t = 1`).
-Its auxiliary field has dimension nine. The exact indexed representation has
-exactly `3^9 = 19,683` lexicographically ordered modes
-`n in {-1, 0, 1}^9`; these are ordered channels, not symmetry-reduced classes.
+The package implements one fixed target: a periodic real-symmetric `3x3`
+nearest-neighbor Hubbard lattice with one Euclidean-time slice. The auxiliary
+field has dimension nine.
 
-For `U > 0` and `beta > 0`, the shared Gaussian precision is
+Let `H` be the 9-by-9 hopping matrix and define
 
 ```text
-A0 = 1 / (U beta).
+A  = 1 / (U beta)
+B+ = exp(kappa beta H) exp(mu_chem beta)
+B- = exp(-kappa beta H) exp(-mu_chem beta)
 ```
 
-Each mode uses the imaginary translation
+The real-axis weight is
 
 ```text
-z = x + i U beta n,
+W(phi) = exp(-A ||phi||^2 / 2)
+         det(I + B+ diag(exp(i phi)))
+         det(I + B- diag(exp(-i phi)))
 ```
 
-where `x` is a real centered Gaussian with precision `A0`. This is a
-translation, so its Jacobian is exactly one.
+For a complex field, `exp(-i phi)` is used literally; no complex conjugation
+is applied.
 
-The positivity claim is deliberately narrow. It applies to the fixed
-one-slice construction when the hopping matrix is real symmetric and the two
-hopping exponentials are symmetric positive definite. Their principal minors
-are then positive, giving strictly positive coefficients and unit channel
-phase. The package does not claim this positivity for nonsymmetric hopping,
-multiple time slices, other geometries, or arbitrary matrix products.
+## Exact channel expansion
 
-## Approved observables
-
-Contour evaluation is authorized only for the following entire polynomials of
-degree at most two:
+For any matrix `B`,
 
 ```text
-O(z) = c + l^T z + z^T Q z.
+det(I + B diag(z)) = sum_S det(B[S,S]) prod(i in S, z_i)
 ```
 
-At dimension `d`, the frozen suite is:
-
-- `quadratic_mean_field`: `c = 0`, `l = 0`, `Q = I / d`;
-- `mixed_linear_quadratic`: `c = 0`,
-  `l = linspace(-0.4, 0.4, d)`, `Q = I / d`;
-- `odd_linear`: `c = 0`, `l = 1 / d`, `Q = 0`.
-
-No callback, inverse-matrix, meromorphic, or otherwise unclassified observable
-is approved. Such an observable requires a separate holomorphy and contour-tail
-argument before it can be added.
-
-For these polynomials, each channel's real Gaussian is integrated
-analytically. Deterministic exact enumeration then averages all 19,683 channel
-moments with their log-space normalized masses and phases. The physical
-normalization reported by this package is
+The two determinants therefore produce exactly one channel for every
 
 ```text
-log Z_physical = logsumexp(channel_log_magnitudes)
-                 + beta * mu_chem * 9.
+n in {-1, 0, 1}^9
 ```
 
-## Canonical numerical anchor
+For `U > 0` and `beta > 0`, `B+` and `B-` are symmetric positive definite.
+Their principal minors are positive, so every channel coefficient is positive.
+Completing the square gives
 
-For `U = 2.0`, `beta = 1.5`, `kappa = 1.0`, and `mu_chem = 0.75`, the frozen
-float64/complex128 values are:
+```text
+exp(-A ||phi||^2 / 2) exp(i n dot phi)
+  = exp(-||n||^2 / (2 A))
+    exp(-A ||phi - i n/A||^2 / 2)
+```
+
+so the contour center is `i U beta n` and the translation has unit Jacobian.
+
+## Observables
+
+The approved observables have the form
+
+```text
+O(z) = c + l^T z + z^T Q z
+```
+
+Their Gaussian conditional moments are integrated analytically. This is why
+the Rao–Blackwellized method only samples channels.
+
+Arbitrary callbacks, inverse matrices, Green functions, and meromorphic
+observables are not part of this contract.
+
+## Normalization
+
+The reported physical log partition is
+
+```text
+log Z = logsumexp(channel_log_masses) + beta * mu_chem * 9
+```
+
+This uses the normalized Gaussian convention and the particle–hole chemical
+potential convention of the target. It is a one-slice, exponential-discretized
+quantity, not the exact continuum-time Hubbard partition function.
+
+For the default parameters, the exact reference values are:
 
 | Quantity | Real | Imaginary |
 |---|---:|---:|
 | `quadratic_mean_field` | `1.2384040693411869` | `0.0` |
 | `mixed_linear_quadratic` | `1.2384040693411869` | `-2.0508704419898993e-15` |
 | `odd_linear` | `0.0` | `0.3228805203648307` |
-| `log Z_physical` | `32.36358464798972` | — |
-
-The machine-readable authority is
-`tests/fixtures/canonical-anchor.json`. Public tests require parity with every
-component at `rtol = 2e-12` and `atol = 2e-12`.
-
-## Private provenance
-
-The extraction source is private commit
-`b7f285d047b2f0c46403106d94ce7f121a406f83`. Its canonical ancestor is the
-merge base with `codex/canonical-baseline`,
-`013bb6293654180d949e75ac85a7c6e1fb419c86` (`docs: design fermion sampling
-products`).
-
-The three frozen private mathematical source blobs have these SHA-256 values.
-The values are computed from `git show <source-commit>:<path>`, so they identify
-the committed blobs rather than a mutable checkout:
-
-| Private source path | SHA-256 |
-|---|---|
-| `ccc/taylorgauss/atoms.py` | `5371105f2a60f7a0e5da3a67b00fed310a77599b88ae5f93480ef6502616c1f0` |
-| `ccc/taylorgauss/targets.py` | `b488bf959642d709f7403de5aeff7a288a5b685afc9032ab269e48853c52e9fd` |
-| `ccc/taylorgauss/indexed_estimators.py` | `d6259fb89c91cb5f4ed2cb07006833c5d3057bb1cdff9202f4db2360fb1e190d` |
-
-The approved coefficient tensors are declared locally in this public package;
-the runtime and tests never import the private checkout, campaign modules, or
-validation modules.
+| `log Z` | `32.36358464798972` | — |

@@ -1,40 +1,26 @@
 # Limitations
 
-Taylor–Gauss 3x3 Sampler version 0.1.0 has one deliberately fixed scientific
-boundary: the periodic `3x3` Hubbard auxiliary-field target with `n_t=1` and a
-field shape of `(1, 3, 3)`. The Euclidean-time slice count cannot be changed;
-any `--n-t` value other than `1` is rejected.
+This package deliberately supports only:
 
-The exact discrete support is always the same 19,683 lexicographically ordered
-channels. The only sampling methods are `exact-enumeration`, `exact-contour`,
-and `exact-contour-rb`. The only channel designs for the two stochastic
-methods are `iid_exact_categorical` and
-`defensive_half_uniform_importance`.
+- periodic `3x3` geometry;
+- one Euclidean-time slice (`n_t=1`), where `n_t=1` is Euclidean imaginary
+  time, not real-time evolution;
+- the three exact/contour methods exposed by the CLI;
+- the four named observables in the README.
 
-Observables are limited to `quadratic_mean_field`,
-`mixed_linear_quadratic`, `odd_linear`, and `physical_log_partition`. The
-polynomial observables satisfy the holomorphy and contour-tail contract stated
-in [`mathematical-contract.md`](mathematical-contract.md); arbitrary callbacks
-are not accepted.
+The 19,683 channels are the complete exact support, not a sample count. A
+stochastic run with `--samples 20000` still contains 20,000 draws, and channel
+identities may repeat.
 
-An exact-enumeration result has analytic uncertainty fields set to `null`.
-For a stochastic polynomial estimate, standard errors cover finite-sample
-variability of the reported observable components. They do not cover model
-mismatch, altered physical parameters, or an observable outside the approved
-contract.
+The explicit contour method samples complex contour endpoints; they are not
+ordinary real-axis samples. Rao–Blackwellization analytically integrates the
+Gaussian source; the Rao–Blackwellized method therefore samples channels only.
 
-`physical_log_partition` is structural even when requested with a stochastic
-method: its real value is the analytically determined physical log partition,
-its imaginary value is zero, and both standard errors are `null`. The value
-does not depend on the sampled channels, Gaussian sources, or sample count,
-although explicit-contour endpoint samples may still be persisted.
+The `physical_log_partition` observable (the physical log partition) is a
+structural analytic result even when requested with a sample method, so its
+standard error is `null`.
+Polynomial estimates have componentwise Monte Carlo standard errors; those
+errors do not cover model mismatch or Trotter error.
 
-Completed output directories are immutable. Sampling, estimate reproduction,
-and report reproduction all refuse an existing output path. Use `validate`
-before consuming or copying a run.
-
-For scientific interpretation, 19,683 channels is exact support, not a sample
-count. Complex contour endpoints are not ordinary real-axis samples.
-Rao–Blackwellization analytically integrates the Gaussian source. `n_t=1` is
-Euclidean imaginary time, not real-time evolution. This release makes no
-multi-slice, 4x4, 3D, Green-function, or production-SMC claim.
+This package makes no multi-slice, 4x4, 3D, Green-function, or production-SMC
+claim. It also does not implement real-time dynamics or arbitrary observables.

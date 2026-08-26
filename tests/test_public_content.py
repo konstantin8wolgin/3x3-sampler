@@ -379,7 +379,7 @@ def test_release_metadata_freezes_numeric_runtime_and_supplies_build_tools():
     assert set(metadata["build-system"]["requires"]).issubset(
         metadata["project"]["optional-dependencies"]["dev"]
     )
-    assert metadata["project"]["license"] == "Apache-2.0"
+    assert metadata["project"]["license"] == "MIT"
 
 
 def test_wheel_members_are_public_and_have_only_public_dependencies(

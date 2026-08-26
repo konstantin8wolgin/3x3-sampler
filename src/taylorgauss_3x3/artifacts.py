@@ -654,6 +654,14 @@ def _load_completed(run_directory: str | Path) -> tuple[Path, dict[str, Any], di
 
 
 def _validate_scope(run: dict[str, Any]) -> None:
+    stochastic = run.get("method") in {
+        EXPLICIT_STOCHASTIC_METHOD,
+        RB_STOCHASTIC_METHOD,
+    }
+    if stochastic and "rng_science_algorithm_version" not in run:
+        raise ArtifactValidationError(
+            "run RNG science algorithm version is missing"
+        )
     common_fields = {
         "authority",
         "euclidean_time_slices",
@@ -669,7 +677,7 @@ def _validate_scope(run: dict[str, Any]) -> None:
         "weight_character",
     }
     expected_fields = set(common_fields)
-    if run.get("method") in {EXPLICIT_STOCHASTIC_METHOD, RB_STOCHASTIC_METHOD}:
+    if stochastic:
         expected_fields.update(
             {
                 "channel_design",
@@ -686,12 +694,6 @@ def _validate_scope(run: dict[str, Any]) -> None:
         raise ArtifactValidationError("run.json has an invalid public artifact schema")
     if run.get("model") != "hubbard_auxiliary_field_exponential":
         raise ArtifactValidationError("run model is outside the public exact authority")
-    if (
-        run.get("method") in {EXPLICIT_STOCHASTIC_METHOD, RB_STOCHASTIC_METHOD}
-        and run.get("rng_science_algorithm_version")
-        != _RNG_SCIENCE_ALGORITHM_VERSION
-    ):
-        raise ArtifactValidationError("run RNG science algorithm version is unsupported")
     if run.get("geometry") != "periodic_3x3" or run.get("field_shape") != [1, 3, 3]:
         raise ArtifactValidationError("run geometry or field shape is outside fixed scope")
     if type(run.get("euclidean_time_slices")) is not int or run["euclidean_time_slices"] != 1:
@@ -711,6 +713,14 @@ def _validate_scope(run: dict[str, Any]) -> None:
         or run_id != _run_id_for(run)
     ):
         raise ArtifactValidationError("run_id does not bind the stored configuration")
+    if (
+        stochastic
+        and run.get("rng_science_algorithm_version")
+        != _RNG_SCIENCE_ALGORITHM_VERSION
+    ):
+        raise ArtifactValidationError(
+            "run RNG science algorithm version is unsupported"
+        )
     derivation = run.get("derivation")
     if derivation is not None:
         if (
@@ -797,6 +807,10 @@ def _validate_stored_contract(
     if not should_persist:
         return
     attrs, arrays = zarr_metadata(samples)
+    if "rng_science_algorithm_version" not in attrs:
+        raise ArtifactValidationError(
+            "samples.zarr RNG science algorithm version is missing"
+        )
     if set(attrs) != {
         "chunk_size",
         "format",
@@ -806,9 +820,14 @@ def _validate_stored_contract(
     }:
         raise ArtifactValidationError("samples.zarr attributes have an invalid schema")
     if (
+        attrs.get("rng_science_algorithm_version")
+        != run["rng_science_algorithm_version"]
+    ):
+        raise ArtifactValidationError(
+            "samples.zarr RNG science algorithm version disagrees with run.json"
+        )
+    if (
         attrs.get("format") != "zarr-v2"
-        or attrs.get("rng_science_algorithm_version")
-        != _RNG_SCIENCE_ALGORITHM_VERSION
         or type(attrs.get("schema_version")) is not int
         or attrs["schema_version"] != SCHEMA_VERSION
         or type(attrs.get("sample_count")) is not int

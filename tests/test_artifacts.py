@@ -56,6 +56,18 @@ def _refresh_hashes(run: Path) -> None:
     )
 
 
+def _recomputed_run_id(run: dict[str, object]) -> str:
+    scientific_configuration = {
+        key: value
+        for key, value in run.items()
+        if key not in {"derivation", "run_id", "schema_version", "state"}
+    }
+    payload = json.dumps(
+        scientific_configuration, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 @pytest.fixture(scope="module")
 def exact_run(tmp_path_factory: pytest.TempPathFactory) -> Path:
     output = tmp_path_factory.mktemp("artifacts") / "exact"
@@ -154,6 +166,79 @@ def test_stochastic_artifacts_declare_the_versioned_rng_science_stream(
         assert run["rng_science_algorithm_version"] == expected
     endpoint_attrs = _read_json(endpoint_run / "samples.zarr" / ".zattrs")
     assert endpoint_attrs["rng_science_algorithm_version"] == expected
+
+
+@pytest.mark.parametrize(
+    ("tamper", "expected_error"),
+    [
+        ("missing", "run RNG science algorithm version is missing"),
+        ("unsupported-rebound", "run RNG science algorithm version is unsupported"),
+        ("changed-with-old-run-id", "run_id does not bind the stored configuration"),
+    ],
+)
+def test_validation_rejects_rehashed_stochastic_run_rng_version_tampering(
+    statistic_run: Path,
+    tmp_path: Path,
+    tamper: str,
+    expected_error: str,
+):
+    """Catches RNG metadata escaping schema, semantic, or run-ID validation."""
+
+    copied = _copy_run(statistic_run, tmp_path / tamper)
+    run = _read_json(copied / "run.json")
+    if tamper == "missing":
+        del run["rng_science_algorithm_version"]
+    else:
+        run["rng_science_algorithm_version"] = (
+            "tg3x3-record-indexed-exact-rational-v999"
+        )
+        if tamper == "unsupported-rebound":
+            run["run_id"] = _recomputed_run_id(run)
+    (copied / "run.json").write_text(
+        json.dumps(run, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    _refresh_hashes(copied)
+
+    with pytest.raises(ArtifactValidationError, match=expected_error):
+        validate_run(copied)
+
+
+@pytest.mark.parametrize(
+    ("tamper", "expected_error"),
+    [
+        ("missing", "samples.zarr RNG science algorithm version is missing"),
+        (
+            "changed",
+            "samples.zarr RNG science algorithm version disagrees with run.json",
+        ),
+    ],
+)
+def test_validation_rejects_rehashed_endpoint_rng_version_tampering(
+    endpoint_run: Path,
+    tmp_path: Path,
+    tamper: str,
+    expected_error: str,
+):
+    """Catches endpoint records losing their binding to the declared RNG stream."""
+
+    copied = _copy_run(endpoint_run, tmp_path / f"endpoint-version-{tamper}")
+    attrs_path = copied / "samples.zarr" / ".zattrs"
+    attrs = _read_json(attrs_path)
+    if tamper == "missing":
+        del attrs["rng_science_algorithm_version"]
+    else:
+        attrs["rng_science_algorithm_version"] = (
+            "tg3x3-record-indexed-exact-rational-v999"
+        )
+    attrs_path.write_text(
+        json.dumps(attrs, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    _refresh_hashes(copied)
+
+    with pytest.raises(ArtifactValidationError, match=expected_error):
+        validate_run(copied)
 
 
 def test_hash_manifest_is_ordered_complete_and_content_addressed(exact_run: Path):
